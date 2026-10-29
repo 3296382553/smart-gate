@@ -75,7 +75,7 @@
 <div class="card">
   <h2>开门记录 <span id="cnt">0 条</span></h2>
   <div id="list"><div class="empty">暂无记录，刷一次卡试试</div></div>
-  <button class="btn sub" onclick="clearLogs()" style="margin-top:12px">清空列表</div>
+  <button class="btn sub" onclick="clearLogs()" style="margin-top:12px">清空列表</button>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -130,13 +130,17 @@ function render() {
   }).join('');
 }
 
-function addLog(t, r) {
-  const d = new Date();
+function addLog(t, r, n, ts) {
+  /* 设备补发的历史里可能有网页已经收到过的，按序号去重 */
+  if (n > 0 && logs.some(x => x.n === n)) return;
+
+  /* ts>0 用设备对时后的真实时间，否则用手机本地时间 */
+  const d = ts ? new Date(ts * 1000) : new Date();
   const hh = String(d.getHours()).padStart(2, '0');
   const mm = String(d.getMinutes()).padStart(2, '0');
   const ss = String(d.getSeconds()).padStart(2, '0');
 
-  logs.unshift({ t: t, r: r, time: hh + ':' + mm + ':' + ss });
+  logs.unshift({ t: t, r: r, n: n || 0, time: hh + ':' + mm + ':' + ss });
   if (logs.length > 30) logs.pop();
   saveLogs();
   render();
@@ -172,6 +176,8 @@ function connect() {
   client.on('connect', () => {
     client.subscribe(keyPrefix + '/log', { qos: 1 });
     client.subscribe(keyPrefix + '/status', { qos: 1 });
+    /* 让设备补发缓冲区里的历史记录，这样关掉网页期间开的门也能看到 */
+    client.publish(keyPrefix + '/req', 'sync', { qos: 1 });
     setState('云端已连接', true);
   });
 
@@ -183,14 +189,16 @@ function connect() {
     const txt = payload.toString();
 
     if (topic.endsWith('/status')) {
-      setState(txt === '1' ? '门禁在线' : '门禁离线', txt === '1');
+      const on = txt === '1';
+      setState(on ? '门禁在线' : '门禁离线', on);
+      if (on) client.publish(keyPrefix + '/req', 'sync', { qos: 1 });
       return;
     }
 
     if (topic.endsWith('/log')) {
       try {
         const o = JSON.parse(txt);
-        addLog(Number(o.t), Number(o.r));
+        addLog(Number(o.t), Number(o.r), Number(o.n) || 0, Number(o.ts) || 0);
       } catch (e) {}
     }
   });
@@ -214,7 +222,14 @@ function toggleCfg() {
 }
 
 function saveKey() {
-  keyPrefix = $('key').value.trim() || DEFAULT_KEY;
+  const v = $('key').value.trim() || DEFAULT_KEY;
+  if (v !== keyPrefix) {
+    /* 换了设备主题，旧的记录不属于这台设备，清掉 */
+    keyPrefix = v;
+    logs = [];
+    saveLogs();
+    render();
+  }
   localStorage.setItem('gate_key', keyPrefix);
 }
 
