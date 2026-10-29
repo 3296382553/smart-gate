@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<title>智能门禁 · 云端</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 16px; background: #f5f6f8; color: #222;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  .card {
+    background: #fff; border-radius: 14px; padding: 18px;
+    margin-bottom: 14px; box-shadow: 0 2px 12px rgba(0,0,0,.06);
+  }
+  .bar { display: flex; align-items: center; justify-content: space-between; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: #bbb; margin-right: 6px; }
+  .dot.on { background: #0a7d33; box-shadow: 0 0 0 4px rgba(10,125,51,.15); }
+  .state { display: flex; align-items: center; font-size: 13px; color: #666; }
+  .btn {
+    display: block; width: 100%; border: 0; border-radius: 12px;
+    padding: 18px; font-size: 18px; font-weight: 600; margin-top: 14px;
+  }
+  .btn:active { transform: scale(.98); }
+  .open { background: #1a73e8; color: #fff; }
+  .open:disabled { background: #a9c4e9; }
+  .sub { background: #eef1f5; color: #333; font-size: 15px; font-weight: 400; }
+  h2 { font-size: 16px; margin: 0 0 10px; display: flex; justify-content: space-between; }
+  h2 span { font-weight: 400; font-size: 13px; color: #888; }
+  .row { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #f2f2f2; }
+  .row:last-child { border-bottom: none; }
+  .idx { width: 42px; color: #aaa; font-size: 13px; }
+  .mode { flex: 1; font-size: 15px; }
+  .time { font-size: 12px; color: #999; margin-right: 8px; }
+  .tag { font-size: 13px; padding: 3px 10px; border-radius: 20px; }
+  .ok { color: #0a7d33; background: #e6f4ea; }
+  .no { color: #c5221f; background: #fce8e6; }
+  .empty { color: #999; font-size: 14px; padding: 24px 0; text-align: center; }
+  input {
+    width: 100%; border: 1px solid #dcdfe6; border-radius: 10px;
+    padding: 12px; font-size: 15px; margin-top: 8px;
+  }
+  .lbl { font-size: 13px; color: #666; }
+  .hint { font-size: 12px; color: #999; margin-top: 6px; line-height: 1.5; }
+  .toast {
+    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+    background: rgba(0,0,0,.78); color: #fff; padding: 10px 18px;
+    border-radius: 24px; font-size: 14px; opacity: 0; transition: opacity .25s;
+    pointer-events: none; white-space: nowrap;
+  }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="bar">
+    <h1>智能门禁</h1>
+    <div class="state"><div class="dot" id="dot"></div><span id="state">连接中…</span></div>
+  </div>
+
+  <button class="btn open" id="btnOpen" onclick="openDoor()">一键开门</button>
+  <button class="btn sub" onclick="toggleCfg()">设备设置</button>
+
+  <div id="cfg" style="display:none">
+    <div class="lbl" style="margin-top:12px">主题前缀（要和 ESP 程序里的 TOPIC_KEY 完全一样）</div>
+    <input id="key" oninput="saveKey()">
+    <div class="hint">修改后点下面的按钮重新连接。演示用公共服务器 broker.emqx.io。</div>
+    <button class="btn sub" onclick="reconnect()">保存并重连</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>开门记录 <span id="cnt">0 条</span></h2>
+  <div id="list"><div class="empty">暂无记录，刷一次卡试试</div></div>
+  <button class="btn sub" onclick="clearLogs()" style="margin-top:12px">清空列表</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://unpkg.com/mqtt@5.3.5/dist/mqtt.min.js"></script>
+<script>
+const HOST = 'wss://broker.emqx.io:8084/mqtt';
+const DEFAULT_KEY = 'gate/anfang_2026_a7f3';
+
+let client = null;
+let logs = [];
+let keyPrefix = localStorage.getItem('gate_key') || DEFAULT_KEY;
+
+function $(id) { return document.getElementById(id); }
+
+function setState(text, on) {
+  $('state').textContent = text;
+  $('dot').className = 'dot' + (on ? ' on' : '');
+}
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = 'toast show';
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => t.className = 'toast', 1400);
+}
+
+function modeName(t) {
+  if (t === 2) return '密码';
+  if (t === 3) return '远程';
+  return '刷卡';
+}
+
+function render() {
+  const list = $('list');
+  $('cnt').textContent = logs.length + ' 条';
+
+  if (logs.length === 0) {
+    list.innerHTML = '<div class="empty">暂无记录，刷一次卡试试</div>';
+    return;
+  }
+
+  list.innerHTML = logs.map((it, i) => {
+    const ok = it.r === 1;
+    return '<div class="row">'
+      + '<div class="idx">#' + (logs.length - i) + '</div>'
+      + '<div class="mode">' + modeName(it.t) + '</div>'
+      + '<div class="time">' + it.time + '</div>'
+      + '<div class="tag ' + (ok ? 'ok' : 'no') + '">' + (ok ? '成功' : '失败') + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+function addLog(t, r) {
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+
+  logs.unshift({ t: t, r: r, time: hh + ':' + mm + ':' + ss });
+  if (logs.length > 30) logs.pop();
+  saveLogs();
+  render();
+}
+
+function saveLogs() {
+  localStorage.setItem('gate_logs', JSON.stringify(logs));
+}
+
+function loadLogs() {
+  try {
+    logs = JSON.parse(localStorage.getItem('gate_logs') || '[]') || [];
+  } catch (e) {
+    logs = [];
+  }
+}
+
+function connect() {
+  if (client) {
+    try { client.end(true); } catch (e) {}
+    client = null;
+  }
+
+  setState('连接中…', false);
+
+  client = mqtt.connect(HOST, {
+    clientId: 'web-' + Math.random().toString(16).slice(2, 10),
+    clean: true,
+    connectTimeout: 8000,
+    reconnectPeriod: 3000
+  });
+
+  client.on('connect', () => {
+    client.subscribe(keyPrefix + '/log', { qos: 1 });
+    client.subscribe(keyPrefix + '/status', { qos: 1 });
+    setState('云端已连接', true);
+  });
+
+  client.on('reconnect', () => setState('正在重连…', false));
+  client.on('offline', () => setState('云端未连接', false));
+  client.on('error', () => setState('连接出错', false));
+
+  client.on('message', (topic, payload) => {
+    const txt = payload.toString();
+
+    if (topic.endsWith('/status')) {
+      setState(txt === '1' ? '门禁在线' : '门禁离线', txt === '1');
+      return;
+    }
+
+    if (topic.endsWith('/log')) {
+      try {
+        const o = JSON.parse(txt);
+        addLog(Number(o.t), Number(o.r));
+      } catch (e) {}
+    }
+  });
+}
+
+function openDoor() {
+  if (!client || !client.connected) {
+    toast('云端未连接，请稍后重试');
+    return;
+  }
+  client.publish(keyPrefix + '/cmd', 'open', { qos: 1 });
+  toast('已发送开门指令');
+  $('btnOpen').disabled = true;
+  setTimeout(() => { $('btnOpen').disabled = false; }, 3200);
+}
+
+function toggleCfg() {
+  const c = $('cfg');
+  c.style.display = (c.style.display === 'none') ? 'block' : 'none';
+  $('key').value = keyPrefix;
+}
+
+function saveKey() {
+  keyPrefix = $('key').value.trim() || DEFAULT_KEY;
+  localStorage.setItem('gate_key', keyPrefix);
+}
+
+function reconnect() {
+  saveKey();
+  connect();
+  toast('已重新连接');
+}
+
+function clearLogs() {
+  logs = [];
+  saveLogs();
+  render();
+}
+
+loadLogs();
+$('key').value = keyPrefix;
+render();
+connect();
+</script>
+</body>
+</html>
