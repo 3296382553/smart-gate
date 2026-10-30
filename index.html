@@ -75,14 +75,37 @@
   .alarm .ops { margin-top: 4px; }
   .warn { background: #c5221f; color: #fff; }
   .warn:active { background: #a71b18; }
+  /* 登录遮罩：未登录时整页盖住，登录状态记在浏览器里 */
+  #login {
+    position: fixed; inset: 0; z-index: 10000; background: #f4f6fa;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  #login .box {
+    width: 100%; max-width: 360px; background: #fff; border-radius: 16px;
+    padding: 22px; box-shadow: 0 12px 40px rgba(0,0,0,.12);
+  }
+  #login h2 { display: block; font-size: 18px; margin: 0 0 8px; }
+  #login .err { color: #c5221f; font-size: 13px; margin-top: 10px; display: none; }
+  .lnk { font-size: 13px; color: #1a73e8; background: none; border: 0; padding: 0; margin-left: 10px; }
 </style>
 </head>
 <body>
 
+<div id="login">
+  <div class="box">
+    <h2>智能门禁</h2>
+    <div class="hint">输入密码后才能查看记录和操作设备。登录状态会保存在本机浏览器，下次打开无需重复输入。</div>
+    <div class="lbl" style="margin-top:14px">密码</div>
+    <input id="pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')tryLogin()">
+    <div class="err" id="pwErr">密码不正确，请重试</div>
+    <button class="btn open" onclick="tryLogin()">登录</button>
+  </div>
+</div>
+
 <div class="card">
   <div class="bar">
     <h1>智能门禁</h1>
-    <div class="state"><div class="dot" id="dot"></div><span id="state">连接中…</span></div>
+    <div class="state"><div class="dot" id="dot"></div><span id="state">连接中…</span><button class="lnk" onclick="logout()">退出</button></div>
   </div>
 
   <button class="btn open" id="btnOpen" onclick="openDoor()">一键开门</button>
@@ -135,6 +158,8 @@
 <script>
 const HOST = 'wss://broker.emqx.io:8084/mqtt';
 const DEFAULT_KEY = 'gate/anfang_2026_a7f3';
+/* 登录密码（Base64 存放，避免直接暴露明文）：当前为 anfang2026 */
+const PASS_B64 = 'YW5mYW5nMjAyNg==';
 
 let client = null;
 let logs = [];
@@ -222,6 +247,46 @@ function loadLogs() {
   } catch (e) {
     logs = [];
   }
+}
+
+/* ---------------- 登录 ---------------- */
+
+function tryLogin() {
+  const v = $('pw').value;
+  let enc = '';
+  try { enc = btoa(v); } catch (e) { enc = ''; }
+
+  if (!v || enc !== PASS_B64) {
+    $('pwErr').style.display = 'block';
+    $('pw').select();
+    return;
+  }
+
+  $('pwErr').style.display = 'none';
+  $('pw').value = '';
+  localStorage.setItem('gate_auth', PASS_B64);   /* 记住登录，下次免输 */
+  enterApp();
+  toast('登录成功');
+}
+
+function enterApp() {
+  $('login').style.display = 'none';
+  if (!client) connect();
+}
+
+function logout() {
+  localStorage.removeItem('gate_auth');
+  if (client) {
+    try { client.end(true); } catch (e) {}
+    client = null;
+  }
+  logs = [];
+  saveLogs();
+  render();
+  $('pwErr').style.display = 'none';
+  setState('未登录', false);
+  $('login').style.display = 'flex';
+  toast('已退出登录');
 }
 
 function connect() {
@@ -414,7 +479,13 @@ $('armStart').value = armCfg.start;
 $('armEnd').value = armCfg.end;
 renderArm(null);
 render();
-connect();
+
+/* 已登录过就直接进页面，否则先显示登录框 */
+if (localStorage.getItem('gate_auth') === PASS_B64) {
+  enterApp();
+} else {
+  $('state').textContent = '未登录';
+}
 </script>
 </body>
 </html>
