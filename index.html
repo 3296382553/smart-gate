@@ -119,6 +119,21 @@
 </div>
 
 <div class="card">
+  <h2>手机推送</h2>
+  <div class="info">
+    订阅主题：<b id="ntfyTopic">anfang_2026_a7f3_x7k2q</b><br>
+    门窗报警、开门记录、设备上下线都会推一条
+  </div>
+  <div class="ops">
+    <button class="btn sub" onclick="copyNtfy()">复制主题</button>
+    <button class="btn sub" onclick="openNtfy()">在网页查看</button>
+  </div>
+  <div class="hint">
+    手机装 ntfy App（应用商店搜 ntfy）→ 点左上角 + → Subscribe to topic → 粘贴上面的主题。装好后即使关掉本网页，报警也会弹窗。
+  </div>
+</div>
+
+<div class="card">
   <h2>开门记录 <span id="cnt">0 条</span></h2>
   <div id="list"><div class="empty">暂无记录，刷一次卡试试</div></div>
   <button class="btn sub" onclick="clearLogs()" style="margin-top:12px">清空列表</button>
@@ -130,6 +145,7 @@
 <script>
 const HOST = 'wss://broker.emqx.io:8084/mqtt';
 const DEFAULT_KEY = 'gate/anfang_2026_a7f3';
+const NTFY_TOPIC = 'anfang_2026_a7f3_x7k2q';
 
 let client = null;
 let logs = [];
@@ -384,6 +400,16 @@ function reconnect() {
   saveKey();
   connect();
   toast('已重新连接');
+}
+
+function copyNtfy() {
+  navigator.clipboard.writeText(NTFY_TOPIC)
+    .then(() => toast('已复制推送主题'))
+    .catch(() => toast('复制失败，请手动记一下'));
+}
+
+function openNtfy() {
+  window.open('https://ntfy.sh/' + NTFY_TOPIC, '_blank');
 }
 
 function clearLogs() {
