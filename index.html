@@ -277,11 +277,12 @@ function connect() {
 
 /* ---------------- 安防布防 ---------------- */
 
-/* 把本地配置下发给设备：on,start,end（当天分钟数） */
+/* 把本地配置下发给设备：on,start,end（当天分钟数）
+ * retain=true，设备重启或页面重开后重新连上也能拿到配置 */
 function publishArm() {
   if (!client || !client.connected) return;
   const msg = (armCfg.on ? 1 : 0) + ',' + toMin(armCfg.start) + ',' + toMin(armCfg.end);
-  client.publish(keyPrefix + '/cfg', msg, { qos: 1 });
+  client.publish(keyPrefix + '/cfg', msg, { qos: 1, retain: true });
 }
 
 function saveArm() {
