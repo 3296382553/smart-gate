@@ -51,6 +51,25 @@
     pointer-events: none; white-space: nowrap;
   }
   .toast.show { opacity: 1; }
+  .lbl2 { font-size: 13px; color: #666; margin-top: 12px; display: block; }
+  .times { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .times input { margin-top: 0; flex: 1; }
+  .switch { display: flex; align-items: center; justify-content: space-between; padding: 4px 0 8px; }
+  .switch b { font-size: 15px; }
+  .info { font-size: 13px; color: #666; margin-top: 10px; line-height: 1.8; }
+  .pill { font-size: 12px; padding: 2px 9px; border-radius: 20px; margin-left: 6px; }
+  .pill.on { color: #0a7d33; background: #e6f4ea; }
+  .pill.off { color: #666; background: #eee; }
+  .pill.bad { color: #c5221f; background: #fce8e6; }
+  .alarm {
+    background: #fdecea; border: 1px solid #f2b8b5; border-radius: 14px;
+    padding: 16px; margin-bottom: 14px;
+  }
+  .alarm .t { font-size: 18px; font-weight: 700; color: #c5221f; }
+  .alarm .s { font-size: 13px; color: #8a3a37; margin-top: 6px; }
+  .alarm .ops { margin-top: 4px; }
+  .warn { background: #c5221f; color: #fff; }
+  .warn:active { background: #a71b18; }
 </style>
 </head>
 <body>
@@ -72,6 +91,33 @@
   </div>
 </div>
 
+<div class="alarm" id="alarmBox" style="display:none">
+  <div class="t">窗户异常打开</div>
+  <div class="s" id="alarmSub">布防期间检测到窗户被打开，声光报警中</div>
+  <div class="ops">
+    <button class="btn warn" onclick="clearAlarm()">关闭报警</button>
+    <button class="btn sub" onclick="disarmNow()">取消布防并关警</button>
+  </div>
+</div>
+
+<div class="card">
+  <h2>安防布防 <span id="armTag" class="pill off">未布防</span></h2>
+  <div class="switch">
+    <b>布防时段</b>
+    <label><input type="checkbox" id="armOn" style="width:auto;margin:0 6px 0 0" onchange="saveArm()">启用</label>
+  </div>
+  <div class="times">
+    <input type="time" id="armStart" value="22:00" onchange="saveArm()">
+    <span class="lbl">至</span>
+    <input type="time" id="armEnd" value="06:00" onchange="saveArm()">
+  </div>
+  <div class="info">
+    布防状态：<span id="armNow">未布防</span><br>
+    窗户磁簧：<span id="winNow">正常</span>
+  </div>
+  <div class="hint">布防时段内窗户被打开，蜂鸣器持续报警并播报"窗户异常打开"；点上面的按钮可远程关警。</div>
+</div>
+
 <div class="card">
   <h2>开门记录 <span id="cnt">0 条</span></h2>
   <div id="list"><div class="empty">暂无记录，刷一次卡试试</div></div>
@@ -89,7 +135,22 @@ let client = null;
 let logs = [];
 let keyPrefix = localStorage.getItem('gate_key') || DEFAULT_KEY;
 
-function $(id) { return document.getElementById(id); }
+/* 布防配置：本地存一份，连上云端后下发给设备 */
+let armCfg = (() => {
+  try {
+    const o = JSON.parse(localStorage.getItem('gate_arm') || 'null');
+    if (o && o.start && o.end) return o;
+  } catch (e) {}
+  return { on: false, start: '22:00', end: '06:00', saved: false };
+})();
+
+function $id(id) { return document.getElementById(id); }
+
+/* "HH:MM" -> 当天分钟数 */
+function toMin(s) {
+  const p = String(s || '').split(':');
+  return (Number(p[0]) || 0) * 60 + (Number(p[1]) || 0);
+}
 
 function setState(text, on) {
   $('state').textContent = text;
@@ -176,8 +237,11 @@ function connect() {
   client.on('connect', () => {
     client.subscribe(keyPrefix + '/log', { qos: 1 });
     client.subscribe(keyPrefix + '/status', { qos: 1 });
+    client.subscribe(keyPrefix + '/info', { qos: 1 });
     /* 让设备补发缓冲区里的历史记录，这样关掉网页期间开的门也能看到 */
     client.publish(keyPrefix + '/req', 'sync', { qos: 1 });
+    /* 把本地保存的布防时段下发给设备 */
+    publishArm();
     setState('云端已连接', true);
   });
 
@@ -202,8 +266,88 @@ function connect() {
         if (o.clr) { logs = []; saveLogs(); render(); return; }
         addLog(Number(o.t), Number(o.r), Number(o.n) || 0, Number(o.ts) || 0);
       } catch (e) {}
+      return;
+    }
+
+    if (topic.endsWith('/info')) {
+      try { applyInfo(JSON.parse(txt)); } catch (e) {}
     }
   });
+}
+
+/* ---------------- 安防布防 ---------------- */
+
+/* 把本地配置下发给设备：on,start,end（当天分钟数） */
+function publishArm() {
+  if (!client || !client.connected) return;
+  const msg = (armCfg.on ? 1 : 0) + ',' + toMin(armCfg.start) + ',' + toMin(armCfg.end);
+  client.publish(keyPrefix + '/cfg', msg, { qos: 1 });
+}
+
+function saveArm() {
+  armCfg.on    = $('armOn').checked;
+  armCfg.start = $('armStart').value || '22:00';
+  armCfg.end   = $('armEnd').value || '06:00';
+  armCfg.saved = true;
+  localStorage.setItem('gate_arm', JSON.stringify(armCfg));
+  publishArm();
+  toast(armCfg.on ? '已启用布防 ' + armCfg.start + '-' + armCfg.end : '已关闭布防');
+}
+
+/* 设备上报的布防/报警状态 */
+function applyInfo(o) {
+  /* 本机没设置过时段时，采用设备上的配置 */
+  if (!armCfg.saved && o.on !== undefined) {
+    armCfg.on = !!o.on;
+    armCfg.start = fmtMin(o.start);
+    armCfg.end = fmtMin(o.end);
+    $('armOn').checked = armCfg.on;
+    $('armStart').value = armCfg.start;
+    $('armEnd').value = armCfg.end;
+  }
+
+  renderArm(o);
+}
+
+function fmtMin(m) {
+  m = Number(m) || 0;
+  return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+}
+
+function renderArm(o) {
+  const alarm = !!(o && o.alarm);
+  const armed = !!(o && o.arm);
+
+  const tag = $('armTag');
+  tag.className = 'pill ' + (armed ? 'on' : 'off');
+  tag.textContent = armed ? '布防中' : '未布防';
+
+  $('armNow').textContent = armed
+    ? '布防中（' + armCfg.start + '-' + armCfg.end + '）'
+    : '未布防';
+  $('winNow').textContent = alarm ? '异常打开' : '正常';
+  $('winNow').style.color = alarm ? '#c5221f' : '';
+  $('winNow').style.fontWeight = alarm ? '700' : '';
+
+  /* 报警横幅：只要设备说在报警就一直显示 */
+  $('alarmBox').style.display = alarm ? 'block' : 'none';
+}
+
+/* 手机端关闭窗户报警 */
+function clearAlarm() {
+  if (!client || !client.connected) { toast('云端未连接'); return; }
+  client.publish(keyPrefix + '/alarm', 'clear', { qos: 1 });
+  toast('已发送关闭报警');
+}
+
+/* 取消布防：同时关闭报警 */
+function disarmNow() {
+  armCfg.on = false;
+  armCfg.saved = true;
+  $('armOn').checked = false;
+  localStorage.setItem('gate_arm', JSON.stringify(armCfg));
+  publishArm();
+  toast('已取消布防，报警停止');
 }
 
 function openDoor() {
@@ -259,6 +403,10 @@ function clearLogs() {
 
 loadLogs();
 $('key').value = keyPrefix;
+$('armOn').checked = armCfg.on;
+$('armStart').value = armCfg.start;
+$('armEnd').value = armCfg.end;
+renderArm(null);
 render();
 connect();
 </script>
