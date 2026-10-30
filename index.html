@@ -87,6 +87,9 @@
   #login h2 { display: block; font-size: 18px; margin: 0 0 8px; }
   #login .err { color: #c5221f; font-size: 13px; margin-top: 10px; display: none; }
   .lnk { font-size: 13px; color: #1a73e8; background: none; border: 0; padding: 0; margin-left: 10px; }
+  #login .links { display: flex; gap: 18px; margin-top: 14px; }
+  #login .links a { font-size: 13px; color: #1a73e8; cursor: pointer; }
+  #login .ok2 { color: #0a7d33; font-size: 13px; margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -94,11 +97,53 @@
 <div id="login">
   <div class="box">
     <h2>智能门禁</h2>
-    <div class="hint">输入密码后才能查看记录和操作设备。登录状态会保存在本机浏览器，下次打开无需重复输入。</div>
-    <div class="lbl" style="margin-top:14px">密码</div>
-    <input id="pw" type="password" autocomplete="current-password" onkeydown="if(event.key==='Enter')tryLogin()">
-    <div class="err" id="pwErr">密码不正确，请重试</div>
-    <button class="btn open" onclick="tryLogin()">登录</button>
+
+    <div id="paneLogin">
+      <div class="hint">登录后才能查看记录和操作设备，登录状态会保存在本机浏览器，下次打开无需重复输入。</div>
+      <div class="lbl" style="margin-top:14px">账号</div>
+      <input id="uname" autocomplete="username" placeholder="admin">
+      <div class="lbl" style="margin-top:10px">密码</div>
+      <input id="pw" type="password" autocomplete="current-password" placeholder="请输入密码" onkeydown="if(event.key==='Enter')tryLogin()">
+      <div class="err" id="pwErr">账号或密码不正确，请重试</div>
+      <button class="btn open" onclick="tryLogin()">登录</button>
+      <div class="links">
+        <a onclick="showPane('change')">修改密码</a>
+        <a onclick="showPane('reset')">忘记密码</a>
+      </div>
+    </div>
+
+    <div id="paneChange" style="display:none">
+      <div class="hint">修改密码：先输入原密码，再设置新密码。</div>
+      <div class="lbl" style="margin-top:14px">原密码</div>
+      <input id="cOld" type="password">
+      <div class="lbl" style="margin-top:10px">新密码</div>
+      <input id="cNew" type="password" placeholder="至少 6 位">
+      <div class="lbl" style="margin-top:10px">确认新密码</div>
+      <input id="cNew2" type="password">
+      <div class="err" id="cErr">请检查输入</div>
+      <div class="ok2" id="cOk" style="display:none">密码已修改，请用新密码登录</div>
+      <button class="btn open" onclick="doChange()">确认修改</button>
+      <div class="links"><a onclick="showPane('login')">返回登录</a></div>
+    </div>
+
+    <div id="paneReset" style="display:none">
+      <div class="hint">忘记密码：填写姓名和身份证号，验证通过后即可设置新密码。</div>
+      <div class="lbl" style="margin-top:14px">姓名</div>
+      <input id="rName" placeholder="与预留信息一致">
+      <div class="lbl" style="margin-top:10px">身份证号</div>
+      <input id="rId" placeholder="18 位身份证号">
+      <div class="err" id="rErr">姓名或身份证号不匹配</div>
+      <button class="btn sub" id="rVerify" onclick="verifyId()">验证身份</button>
+      <div id="rStep2" style="display:none">
+        <div class="ok2">身份验证通过</div>
+        <div class="lbl" style="margin-top:10px">新密码</div>
+        <input id="rNew" type="password" placeholder="至少 6 位">
+        <div class="lbl" style="margin-top:10px">确认新密码</div>
+        <input id="rNew2" type="password">
+        <button class="btn open" onclick="doReset()">设置新密码</button>
+      </div>
+      <div class="links"><a onclick="showPane('login')">返回登录</a></div>
+    </div>
   </div>
 </div>
 
@@ -249,14 +294,36 @@ function loadLogs() {
   }
 }
 
-/* ---------------- 登录 ---------------- */
+/* ---------------- 登录 / 修改密码 / 忘记密码 ---------------- */
+
+const DEF_USER = 'admin';
+/* 预留身份信息，用于“忘记密码”的身份核验；改成自己的真实姓名和身份证号即可 */
+const ID_NAME = '张三';
+const ID_NO   = '110101200001011234';
+
+function b64(s) {
+  try { return btoa(unescape(encodeURIComponent(s))); } catch (e) { return ''; }
+}
+
+function curUser() { return localStorage.getItem('gate_user') || DEF_USER; }
+function curPass() { return localStorage.getItem('gate_pw') || PASS_B64; }
+function authToken() { return b64(curUser() + '|' + curPass()); }
+
+function showPane(name) {
+  $('paneLogin').style.display  = (name === 'login')  ? 'block' : 'none';
+  $('paneChange').style.display = (name === 'change') ? 'block' : 'none';
+  $('paneReset').style.display  = (name === 'reset')  ? 'block' : 'none';
+  $('pwErr').style.display = 'none';
+  $('cErr').style.display  = 'none';
+  $('rErr').style.display  = 'none';
+  if (name === 'login') $('pw').value = '';
+}
 
 function tryLogin() {
-  const v = $('pw').value;
-  let enc = '';
-  try { enc = btoa(v); } catch (e) { enc = ''; }
+  const u = $('uname').value.trim() || DEF_USER;
+  const p = $('pw').value;
 
-  if (!v || enc !== PASS_B64) {
+  if (u !== curUser() || !p || b64(p) !== curPass()) {
     $('pwErr').style.display = 'block';
     $('pw').select();
     return;
@@ -264,9 +331,62 @@ function tryLogin() {
 
   $('pwErr').style.display = 'none';
   $('pw').value = '';
-  localStorage.setItem('gate_auth', PASS_B64);   /* 记住登录，下次免输 */
+  /* 记住登录状态，下次免输 */
+  localStorage.setItem('gate_user', u);
+  localStorage.setItem('gate_auth', authToken());
   enterApp();
   toast('登录成功');
+}
+
+/* 修改密码：原密码 + 新密码 */
+function doChange() {
+  const oldPw = $('cOld').value;
+  const np    = $('cNew').value;
+  const np2   = $('cNew2').value;
+  const err   = $('cErr');
+
+  if (!oldPw || b64(oldPw) !== curPass()) { err.textContent = '原密码不正确'; err.style.display = 'block'; return; }
+  if (np.length < 6)                      { err.textContent = '新密码至少 6 位'; err.style.display = 'block'; return; }
+  if (np !== np2)                         { err.textContent = '两次输入的新密码不一致'; err.style.display = 'block'; return; }
+
+  err.style.display = 'none';
+  localStorage.setItem('gate_pw', b64(np));
+  localStorage.removeItem('gate_auth');          /* 改完要重新登录 */
+  $('cOld').value = $('cNew').value = $('cNew2').value = '';
+  $('cOk').style.display = 'block';
+  setTimeout(() => { $('cOk').style.display = 'none'; showPane('login'); }, 1600);
+}
+
+/* 忘记密码第一步：姓名 + 身份证号核验 */
+function verifyId() {
+  const name = $('rName').value.trim();
+  const id   = $('rId').value.trim().toUpperCase();
+
+  if (name !== ID_NAME || id !== ID_NO) {
+    $('rErr').style.display = 'block';
+    return;
+  }
+
+  $('rErr').style.display = 'none';
+  $('rVerify').style.display = 'none';
+  $('rStep2').style.display = 'block';
+}
+
+/* 忘记密码第二步：设置新密码 */
+function doReset() {
+  const np  = $('rNew').value;
+  const np2 = $('rNew2').value;
+
+  if (np.length < 6) { $('rErr').textContent = '新密码至少 6 位'; $('rErr').style.display = 'block'; return; }
+  if (np !== np2)    { $('rErr').textContent = '两次输入的新密码不一致'; $('rErr').style.display = 'block'; return; }
+
+  localStorage.setItem('gate_pw', b64(np));
+  localStorage.removeItem('gate_auth');
+  $('rNew').value = $('rNew2').value = '';
+  $('rStep2').style.display = 'none';
+  $('rVerify').style.display = 'block';
+  toast('新密码已设置，请重新登录');
+  showPane('login');
 }
 
 function enterApp() {
@@ -283,9 +403,9 @@ function logout() {
   logs = [];
   saveLogs();
   render();
-  $('pwErr').style.display = 'none';
   setState('未登录', false);
   $('login').style.display = 'flex';
+  showPane('login');
   toast('已退出登录');
 }
 
@@ -481,7 +601,8 @@ renderArm(null);
 render();
 
 /* 已登录过就直接进页面，否则先显示登录框 */
-if (localStorage.getItem('gate_auth') === PASS_B64) {
+$('uname').value = curUser();
+if (localStorage.getItem('gate_auth') === authToken()) {
   enterApp();
 } else {
   $('state').textContent = '未登录';
