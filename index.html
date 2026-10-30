@@ -198,6 +198,8 @@ function connect() {
     if (topic.endsWith('/log')) {
       try {
         const o = JSON.parse(txt);
+        /* 设备被手动清空后广播的标记，所有打开的页面一起清掉 */
+        if (o.clr) { logs = []; saveLogs(); render(); return; }
         addLog(Number(o.t), Number(o.r), Number(o.n) || 0, Number(o.ts) || 0);
       } catch (e) {}
     }
@@ -240,9 +242,19 @@ function reconnect() {
 }
 
 function clearLogs() {
+  if (!confirm('确认清空所有开门记录？设备里缓存的记录也会一起删除。')) return;
+
   logs = [];
   saveLogs();
   render();
+
+  /* 同时让设备把缓冲清掉，否则下次打开网页又会补发回来 */
+  if (client && client.connected) {
+    client.publish(keyPrefix + '/clr', 'clear', { qos: 1 });
+    toast('已清空，设备记录已删除');
+  } else {
+    toast('已清空本页记录（设备未连接，未同步删除）');
+  }
 }
 
 loadLogs();
