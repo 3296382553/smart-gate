@@ -121,15 +121,11 @@
 <div class="card">
   <h2>手机推送</h2>
   <div class="info">
-    订阅主题：<b id="ntfyTopic">anfang_2026_a7f3_x7k2q</b><br>
-    门窗报警、开门记录、设备上下线都会推一条
-  </div>
-  <div class="ops">
-    <button class="btn sub" onclick="copyNtfy()">复制主题</button>
-    <button class="btn sub" onclick="openNtfy()">在网页查看</button>
+    推送通道：<b>企业微信群机器人</b><br>
+    窗户报警、开门记录、设备上下线都会发到指定企业微信群
   </div>
   <div class="hint">
-    手机装 ntfy App（应用商店搜 ntfy）→ 点左上角 + → Subscribe to topic → 粘贴上面的主题。装好后即使关掉本网页，报警也会弹窗。
+    在群里就能收到消息，手机微信会有弹窗提醒；即使关掉本网页也能收到。要换群或换机器人，改固件里的 WX_WEBHOOK 后重新烧录即可。
   </div>
 </div>
 
@@ -145,7 +141,6 @@
 <script>
 const HOST = 'wss://broker.emqx.io:8084/mqtt';
 const DEFAULT_KEY = 'gate/anfang_2026_a7f3';
-const NTFY_TOPIC = 'anfang_2026_a7f3_x7k2q';
 
 let client = null;
 let logs = [];
@@ -400,16 +395,6 @@ function reconnect() {
   saveKey();
   connect();
   toast('已重新连接');
-}
-
-function copyNtfy() {
-  navigator.clipboard.writeText(NTFY_TOPIC)
-    .then(() => toast('已复制推送主题'))
-    .catch(() => toast('复制失败，请手动记一下'));
-}
-
-function openNtfy() {
-  window.open('https://ntfy.sh/' + NTFY_TOPIC, '_blank');
 }
 
 function clearLogs() {
