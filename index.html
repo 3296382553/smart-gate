@@ -61,6 +61,10 @@
   .pill.on { color: #0a7d33; background: #e6f4ea; }
   .pill.off { color: #666; background: #eee; }
   .pill.bad { color: #c5221f; background: #fce8e6; }
+  input[type="range"] {
+    width: 100%; margin-top: 8px; padding: 0; border: none;
+    accent-color: #1a73e8;
+  }
   /* 三个安防模块：报警时整块变红并闪烁 */
   .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .tile {
@@ -190,11 +194,13 @@
       <label><input type="checkbox" id="s2" onchange="saveSense()">布防</label>
     </div>
   </div>
+  <div class="lbl2" style="margin-top:14px">报警音量 <span id="volPct" style="color:#1a73e8;font-weight:700">100%</span></div>
+  <input type="range" id="vol" min="0" max="100" step="5" value="100" oninput="volLabel()" onchange="saveVol()">
   <div id="alarmOps" style="display:none">
     <button class="btn warn" onclick="clearAlarm()">关闭报警</button>
     <button class="btn sub" onclick="disarmNow()">取消布防并关警</button>
   </div>
-  <div class="hint">报警时对应模块变红并闪烁；不需要的模块把“布防”勾掉，该传感器就不再触发报警。</div>
+  <div class="hint">报警时对应模块变红并闪烁；不需要的模块把“布防”勾掉，该传感器就不再触发报警；拖动滑条调报警音量（0% 即静音）。</div>
 </div>
 
 <div class="card">
@@ -215,24 +221,7 @@
 </div>
 
 <div class="card">
-  <h2>报警语音 <span id="voiceTag" class="pill on">全部开启</span></h2>
-  <div class="switch">
-    <b>窗户报警（00003）</b>
-    <label><input type="checkbox" id="v3" style="width:auto;margin:0 6px 0 0" onchange="saveVoice()">播放</label>
-  </div>
-  <div class="switch">
-    <b>大门报警（00004 非法闯入）</b>
-    <label><input type="checkbox" id="v4" style="width:auto;margin:0 6px 0 0" onchange="saveVoice()">播放</label>
-  </div>
-  <div class="switch">
-    <b>人体感应（00005 门外异常）</b>
-    <label><input type="checkbox" id="v5" style="width:auto;margin:0 6px 0 0" onchange="saveVoice()">播放</label>
-  </div>
-  <div class="hint">关掉后对应报警只推送手机通知，喇叭不出声（特殊情况下可手动静音）。设置会保存在本机并同步给设备。</div>
-</div>
-
-<div class="card">
-  <h2>开门记录 <span id="cnt">0 条</span></h2>
+  <h2>开门记录 <span id="cnt">0 条</span> <button class="lnk" onclick="refreshLogs()">刷新</button></h2>
   <div id="list"><div class="empty">暂无记录，刷一次卡试试</div></div>
   <button class="btn sub" onclick="clearLogs()" style="margin-top:12px">清空列表</button>
 </div>
@@ -259,14 +248,10 @@ let armCfg = (() => {
   return { on: false, start: '22:00', end: '06:00', saved: false };
 })();
 
-/* 报警语音开关：3=窗户 4=大门 5=人体感应，true=播放 false=静音 */
-let voiceCfg = (() => {
-  let c = { 3: true, 4: true, 5: true };
-  try {
-    const o = JSON.parse(localStorage.getItem('gate_voice') || 'null');
-    if (o) [3, 4, 5].forEach(n => { if (o[n] === false) c[n] = false; });
-  } catch (e) {}
-  return c;
+/* 报警音量：0~100%，存本机并下发设备（设备端换算成语音模块 0~30 级） */
+let volPct = (() => {
+  const v = Number(localStorage.getItem('gate_vol'));
+  return (v >= 0 && v <= 100) ? v : 100;
 })();
 
 /* 模块布防开关：0=窗户 1=大门 2=人体感应，true=参与布防 false=停用 */
@@ -330,8 +315,14 @@ function render() {
 }
 
 function addLog(t, r, n, ts) {
-  /* 设备补发的历史里可能有网页已经收到过的，按序号去重 */
-  if (n > 0 && logs.some(x => x.n === n)) return;
+  if (n > 0) {
+    /* 设备补发的历史里可能有网页已经收到过的，按序号去重 */
+    if (logs.some(x => x.n === n)) return;
+
+    /* 设备重新上电/重刷固件后序号从小号重新计，旧缓存里的序号会遮住新记录
+     * -> 收到比当前最新序号还小的新序号时，判定设备重开过，清掉旧缓存重记 */
+    if (logs.length > 0 && n < (logs[0].n || 0)) logs = [];
+  }
 
   /* ts>0 用设备对时后的真实时间，否则用手机本地时间 */
   const d = ts ? new Date(ts * 1000) : new Date();
@@ -491,14 +482,14 @@ function connect() {
     client.subscribe(keyPrefix + '/log', { qos: 1 });
     client.subscribe(keyPrefix + '/status', { qos: 1 });
     client.subscribe(keyPrefix + '/info', { qos: 1 });
-    client.subscribe(keyPrefix + '/voice', { qos: 1 });
+    client.subscribe(keyPrefix + '/vol', { qos: 1 });
     client.subscribe(keyPrefix + '/sense', { qos: 1 });
     /* 让设备补发缓冲区里的历史记录，这样关掉网页期间开的门也能看到 */
     client.publish(keyPrefix + '/req', 'sync', { qos: 1 });
     /* 把本地保存的布防时段下发给设备 */
     publishArm();
-    /* 把语音开关、模块布防也下发一次（retained，设备重启也能拿到） */
-    publishVoice();
+    /* 音量、模块布防也下发一次（retained，设备重启也能拿到） */
+    publishVol();
     publishSense();
     setState('云端已连接', true);
   });
@@ -532,14 +523,13 @@ function connect() {
       return;
     }
 
-    /* 语音开关回读（retained），换了手机/重开网页也能看到设备当前状态 */
-    if (topic.endsWith('/voice')) {
-      const m = txt.split(',');
-      const n = Number(m[0]);
-      if (n >= 3 && n <= 5) {
-        voiceCfg[n] = (Number(m[1]) !== 0);
-        localStorage.setItem('gate_voice', JSON.stringify(voiceCfg));
-        renderVoice();
+    /* 音量回读（retained），换了手机/重开网页也能看到设备当前音量 */
+    if (topic.endsWith('/vol')) {
+      const v = Number(txt);
+      if (v >= 0 && v <= 100) {
+        volPct = v;
+        localStorage.setItem('gate_vol', String(volPct));
+        renderVol();
       }
       return;
     }
@@ -577,32 +567,26 @@ function saveArm() {
   toast(armCfg.on ? '已启用布防 ' + armCfg.start + '-' + armCfg.end : '已关闭布防');
 }
 
-/* ---------------- 报警语音开关 ---------------- */
-function publishVoice() {
+/* ---------------- 报警音量 ---------------- */
+function publishVol() {
   if (!client || !client.connected) return;
-  [3, 4, 5].forEach(n => {
-    client.publish(keyPrefix + '/voice', n + ',' + (voiceCfg[n] ? 1 : 0), { qos: 1, retain: true });
-  });
+  client.publish(keyPrefix + '/vol', String(volPct), { qos: 1, retain: true });
 }
 
-function renderVoice() {
-  let on = 0;
-  [3, 4, 5].forEach(n => {
-    const cb = $('v' + n);
-    if (cb) cb.checked = !!voiceCfg[n];
-    if (voiceCfg[n]) on++;
-  });
-  const tag = $('voiceTag');
-  tag.textContent = on === 3 ? '全部开启' : (on === 0 ? '全部静音' : on + '/3 开启');
-  tag.className = 'pill ' + (on === 3 ? 'on' : (on === 0 ? 'bad' : 'off'));
+function renderVol() {
+  $('vol').value = volPct;
+  $('volPct').textContent = volPct + '%';
 }
 
-function saveVoice() {
-  [3, 4, 5].forEach(n => { voiceCfg[n] = $('v' + n).checked; });
-  localStorage.setItem('gate_voice', JSON.stringify(voiceCfg));
-  renderVoice();
-  publishVoice();
-  toast('语音设置已同步到设备');
+function volLabel() {
+  $('volPct').textContent = $('vol').value + '%';
+}
+
+function saveVol() {
+  volPct = Number($('vol').value);
+  localStorage.setItem('gate_vol', String(volPct));
+  publishVol();
+  toast('报警音量 ' + volPct + '% 已同步到设备');
 }
 
 /* ---------------- 模块布防开关 ---------------- */
@@ -739,6 +723,13 @@ function reconnect() {
   toast('已重新连接');
 }
 
+/* 手动刷新：让设备把缓冲的开门记录重新补发一遍 */
+function refreshLogs() {
+  if (!client || !client.connected) { toast('云端未连接'); return; }
+  client.publish(keyPrefix + '/req', 'sync', { qos: 1 });
+  toast('已请求设备补发记录');
+}
+
 function clearLogs() {
   if (!confirm('确认清空所有开门记录？设备里缓存的记录也会一起删除。')) return;
 
@@ -762,7 +753,7 @@ $('armStart').value = armCfg.start;
 $('armEnd').value = armCfg.end;
 renderArm(null);
 renderSense();
-renderVoice();
+renderVol();
 render();
 
 /* 已登录过就直接进页面，否则先显示登录框 */
