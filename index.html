@@ -75,6 +75,9 @@
   .tile .s { font-size: 12px; color: #888; margin: 6px 0 8px; }
   .tile label { font-size: 12px; color: #555; display: inline-flex; align-items: center; }
   .tile input { width: auto; margin: 0 4px 0 0; padding: 0; }
+  .vrow { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
+  .vrow input[type=range] { flex: 1; width: auto; min-width: 0; padding: 0; margin: 0; border: 0; height: 20px; }
+  .vrow span { font-size: 11px; color: #1a73e8; min-width: 34px; text-align: right; }
   .tile.bad {
     border-color: #e8453c; background: #fdecea;
     animation: tileBlink 1s infinite;
@@ -182,25 +185,26 @@
       <div class="t">窗户</div>
       <div class="s" id="tWinS">正常</div>
       <label><input type="checkbox" id="s0" onchange="saveSense()">布防</label>
+      <div class="vrow"><input type="range" min="0" max="100" step="5" id="v0" oninput="volLabel(0)" onchange="saveVol()"><span id="vp0">100%</span></div>
     </div>
     <div class="tile" id="tDoor">
       <div class="t">大门</div>
       <div class="s" id="tDoorS">正常</div>
       <label><input type="checkbox" id="s1" onchange="saveSense()">布防</label>
+      <div class="vrow"><input type="range" min="0" max="100" step="5" id="v1" oninput="volLabel(1)" onchange="saveVol()"><span id="vp1">100%</span></div>
     </div>
     <div class="tile" id="tPir">
       <div class="t">人体感应</div>
       <div class="s" id="tPirS">无人</div>
       <label><input type="checkbox" id="s2" onchange="saveSense()">布防</label>
+      <div class="vrow"><input type="range" min="0" max="100" step="5" id="v2" oninput="volLabel(2)" onchange="saveVol()"><span id="vp2">100%</span></div>
     </div>
   </div>
-  <div class="lbl2" style="margin-top:14px">报警音量 <span id="volPct" style="color:#1a73e8;font-weight:700">100%</span></div>
-  <input type="range" id="vol" min="0" max="100" step="5" value="100" oninput="volLabel()" onchange="saveVol()">
   <div id="alarmOps" style="display:none">
     <button class="btn warn" onclick="clearAlarm()">关闭报警</button>
     <button class="btn sub" onclick="disarmNow()">取消布防并关警</button>
   </div>
-  <div class="hint">报警时对应模块变红并闪烁；不需要的模块把“布防”勾掉，该传感器就不再触发报警；拖动滑条调报警音量（0% 即静音）。</div>
+  <div class="hint">报警时对应模块变红并闪烁；不需要的模块把“布防”勾掉；每个模块下面的滑条单独调它的报警音量（0% 静音该模块），开门提示音不受影响。</div>
 </div>
 
 <div class="card">
@@ -248,10 +252,14 @@ let armCfg = (() => {
   return { on: false, start: '22:00', end: '06:00', saved: false };
 })();
 
-/* 报警音量：0~100%，存本机并下发设备（设备端换算成语音模块 0~30 级） */
-let volPct = (() => {
-  const v = Number(localStorage.getItem('gate_vol'));
-  return (v >= 0 && v <= 100) ? v : 100;
+/* 三模块报警音量 0~100%：窗户/大门/人体感应，存本机并下发设备
+ * 设备端在播每条报警语音前切到对应模块的音量 */
+let vols = (() => {
+  try {
+    const o = JSON.parse(localStorage.getItem('gate_vol') || 'null');
+    if (Array.isArray(o) && o.length === 3) return o;
+  } catch (e) {}
+  return [100, 100, 100];
 })();
 
 /* 模块布防开关：0=窗户 1=大门 2=人体感应，true=参与布防 false=停用 */
@@ -525,10 +533,10 @@ function connect() {
 
     /* 音量回读（retained），换了手机/重开网页也能看到设备当前音量 */
     if (topic.endsWith('/vol')) {
-      const v = Number(txt);
-      if (v >= 0 && v <= 100) {
-        volPct = v;
-        localStorage.setItem('gate_vol', String(volPct));
+      const a = txt.split(',').map(Number);
+      if (a.length === 3 && a.every(v => v >= 0 && v <= 100)) {
+        vols = a;
+        localStorage.setItem('gate_vol', JSON.stringify(vols));
         renderVol();
       }
       return;
@@ -570,23 +578,26 @@ function saveArm() {
 /* ---------------- 报警音量 ---------------- */
 function publishVol() {
   if (!client || !client.connected) return;
-  client.publish(keyPrefix + '/vol', String(volPct), { qos: 1, retain: true });
+  client.publish(keyPrefix + '/vol', vols.join(','), { qos: 1, retain: true });
 }
 
 function renderVol() {
-  $('vol').value = volPct;
-  $('volPct').textContent = volPct + '%';
+  for (let i = 0; i < 3; i++) {
+    const r = $('v' + i), l = $('vp' + i);
+    if (r) r.value = vols[i];
+    if (l) l.textContent = vols[i] + '%';
+  }
 }
 
-function volLabel() {
-  $('volPct').textContent = $('vol').value + '%';
+function volLabel(i) {
+  $('vp' + i).textContent = $('v' + i).value + '%';
 }
 
 function saveVol() {
-  volPct = Number($('vol').value);
-  localStorage.setItem('gate_vol', String(volPct));
+  vols = [0, 1, 2].map(i => Number($('v' + i).value));
+  localStorage.setItem('gate_vol', JSON.stringify(vols));
   publishVol();
-  toast('报警音量 ' + volPct + '% 已同步到设备');
+  toast('模块音量已同步到设备');
 }
 
 /* ---------------- 模块布防开关 ---------------- */
