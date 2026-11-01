@@ -75,9 +75,7 @@
   .tile .s { font-size: 12px; color: #888; margin: 6px 0 8px; }
   .tile label { font-size: 12px; color: #555; display: inline-flex; align-items: center; }
   .tile input { width: auto; margin: 0 4px 0 0; padding: 0; }
-  .vrow { display: flex; align-items: center; gap: 4px; margin-top: 8px; }
-  .vrow input[type=range] { flex: 1; width: auto; min-width: 0; padding: 0; margin: 0; border: 0; height: 20px; }
-  .vrow span { font-size: 11px; color: #1a73e8; min-width: 34px; text-align: right; }
+  .tile .mute { display: flex; align-items: center; font-size: 12px; color: #555; margin-top: 6px; }
   .tile.bad {
     border-color: #e8453c; background: #fdecea;
     animation: tileBlink 1s infinite;
@@ -185,26 +183,26 @@
       <div class="t">窗户</div>
       <div class="s" id="tWinS">正常</div>
       <label><input type="checkbox" id="s0" onchange="saveSense()">布防</label>
-      <div class="vrow"><input type="range" min="0" max="100" step="5" id="v0" oninput="volLabel(0)" onchange="saveVol()"><span id="vp0">100%</span></div>
+      <label class="mute"><input type="checkbox" id="v0" onchange="saveVol()">静音</label>
     </div>
     <div class="tile" id="tDoor">
       <div class="t">大门</div>
       <div class="s" id="tDoorS">正常</div>
       <label><input type="checkbox" id="s1" onchange="saveSense()">布防</label>
-      <div class="vrow"><input type="range" min="0" max="100" step="5" id="v1" oninput="volLabel(1)" onchange="saveVol()"><span id="vp1">100%</span></div>
+      <label class="mute"><input type="checkbox" id="v1" onchange="saveVol()">静音</label>
     </div>
     <div class="tile" id="tPir">
       <div class="t">人体感应</div>
       <div class="s" id="tPirS">无人</div>
       <label><input type="checkbox" id="s2" onchange="saveSense()">布防</label>
-      <div class="vrow"><input type="range" min="0" max="100" step="5" id="v2" oninput="volLabel(2)" onchange="saveVol()"><span id="vp2">100%</span></div>
+      <label class="mute"><input type="checkbox" id="v2" onchange="saveVol()">静音</label>
     </div>
   </div>
   <div id="alarmOps" style="display:none">
     <button class="btn warn" onclick="clearAlarm()">关闭报警</button>
     <button class="btn sub" onclick="disarmNow()">取消布防并关警</button>
   </div>
-  <div class="hint">报警时对应模块变红并闪烁；不需要的模块把“布防”勾掉；每个模块下面的滑条单独调它的报警音量（0% 静音该模块），开门提示音不受影响。</div>
+  <div class="hint">报警时对应模块变红并闪烁；不需要的模块把“布防”勾掉；勾“静音”后该模块报警不再发声，手机推送和红色闪烁照常。</div>
 </div>
 
 <div class="card">
@@ -252,12 +250,12 @@ let armCfg = (() => {
   return { on: false, start: '22:00', end: '06:00', saved: false };
 })();
 
-/* 三模块报警音量 0~100%：窗户/大门/人体感应，存本机并下发设备
- * 设备端在播每条报警语音前切到对应模块的音量 */
+/* 三模块报警静音开关：窗户/大门/人体感应。存 0(静音)/100(正常)，
+ * 下发格式与音量协议相同，设备端 0 即静音该模块 */
 let vols = (() => {
   try {
     const o = JSON.parse(localStorage.getItem('gate_vol') || 'null');
-    if (Array.isArray(o) && o.length === 3) return o;
+    if (Array.isArray(o) && o.length === 3) return o.map(v => v === 0 ? 0 : 100);
   } catch (e) {}
   return [100, 100, 100];
 })();
@@ -531,11 +529,11 @@ function connect() {
       return;
     }
 
-    /* 音量回读（retained），换了手机/重开网页也能看到设备当前音量 */
+    /* 静音开关回读（retained），换了手机/重开网页也能看到设备当前状态 */
     if (topic.endsWith('/vol')) {
       const a = txt.split(',').map(Number);
       if (a.length === 3 && a.every(v => v >= 0 && v <= 100)) {
-        vols = a;
+        vols = a.map(v => v === 0 ? 0 : 100);
         localStorage.setItem('gate_vol', JSON.stringify(vols));
         renderVol();
       }
@@ -583,21 +581,16 @@ function publishVol() {
 
 function renderVol() {
   for (let i = 0; i < 3; i++) {
-    const r = $('v' + i), l = $('vp' + i);
-    if (r) r.value = vols[i];
-    if (l) l.textContent = vols[i] + '%';
+    const cb = $('v' + i);
+    if (cb) cb.checked = (vols[i] === 0);
   }
 }
 
-function volLabel(i) {
-  $('vp' + i).textContent = $('v' + i).value + '%';
-}
-
 function saveVol() {
-  vols = [0, 1, 2].map(i => Number($('v' + i).value));
+  vols = [0, 1, 2].map(i => $('v' + i) && $('v' + i).checked ? 0 : 100);
   localStorage.setItem('gate_vol', JSON.stringify(vols));
   publishVol();
-  toast('模块音量已同步到设备');
+  toast('静音设置已同步到设备');
 }
 
 /* ---------------- 模块布防开关 ---------------- */
