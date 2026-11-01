@@ -61,18 +61,25 @@
   .pill.on { color: #0a7d33; background: #e6f4ea; }
   .pill.off { color: #666; background: #eee; }
   .pill.bad { color: #c5221f; background: #fce8e6; }
-  /* 报警弹窗：盖在页面正中，避免用户翻到下面才看见 */
-  .alarm {
-    background: #fdecea; border: 1px solid #f2b8b5; border-radius: 14px;
-    padding: 16px; margin-bottom: 14px;
-    position: fixed; left: 12px; right: 12px; top: 50%; z-index: 9999;
-    transform: translateY(-50%);
-    max-width: 420px; margin-left: auto; margin-right: auto;
-    box-shadow: 0 18px 60px rgba(197, 34, 31, .35);
+  /* 三个安防模块：报警时整块变红并闪烁 */
+  .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .tile {
+    border: 1px solid #e3e6eb; border-radius: 12px; background: #f7f8fa;
+    padding: 12px 8px; text-align: center; transition: background .2s;
   }
-  .alarm .t { font-size: 18px; font-weight: 700; color: #c5221f; }
-  .alarm .s { font-size: 13px; color: #8a3a37; margin-top: 6px; }
-  .alarm .ops { margin-top: 4px; }
+  .tile .t { font-size: 14px; font-weight: 600; color: #333; }
+  .tile .s { font-size: 12px; color: #888; margin: 6px 0 8px; }
+  .tile label { font-size: 12px; color: #555; display: inline-flex; align-items: center; }
+  .tile input { width: auto; margin: 0 4px 0 0; padding: 0; }
+  .tile.bad {
+    border-color: #e8453c; background: #fdecea;
+    animation: tileBlink 1s infinite;
+  }
+  .tile.bad .t, .tile.bad .s { color: #c5221f; font-weight: 700; }
+  @keyframes tileBlink {
+    0%, 100% { background: #fdecea; box-shadow: 0 0 0 0 rgba(197, 34, 31, .35); }
+    50%      { background: #f6b3ae; box-shadow: 0 0 0 6px rgba(197, 34, 31, .12); }
+  }
   .warn { background: #c5221f; color: #fff; }
   .warn:active { background: #a71b18; }
   /* 登录遮罩：未登录时整页盖住，登录状态记在浏览器里 */
@@ -164,13 +171,30 @@
   </div>
 </div>
 
-<div class="alarm" id="alarmBox" style="display:none">
-  <div class="t" id="alarmTitle">窗户异常打开</div>
-  <div class="s" id="alarmSub">布防期间检测到窗户被打开，声光报警中</div>
-  <div class="ops">
+<div class="card">
+  <h2>安防模块 <span id="modTag" class="pill on">全部布防</span></h2>
+  <div class="tiles">
+    <div class="tile" id="tWin">
+      <div class="t">窗户</div>
+      <div class="s" id="tWinS">正常</div>
+      <label><input type="checkbox" id="s0" onchange="saveSense()">布防</label>
+    </div>
+    <div class="tile" id="tDoor">
+      <div class="t">大门</div>
+      <div class="s" id="tDoorS">正常</div>
+      <label><input type="checkbox" id="s1" onchange="saveSense()">布防</label>
+    </div>
+    <div class="tile" id="tPir">
+      <div class="t">人体感应</div>
+      <div class="s" id="tPirS">无人</div>
+      <label><input type="checkbox" id="s2" onchange="saveSense()">布防</label>
+    </div>
+  </div>
+  <div id="alarmOps" style="display:none">
     <button class="btn warn" onclick="clearAlarm()">关闭报警</button>
     <button class="btn sub" onclick="disarmNow()">取消布防并关警</button>
   </div>
+  <div class="hint">报警时对应模块变红并闪烁；不需要的模块把“布防”勾掉，该传感器就不再触发报警。</div>
 </div>
 
 <div class="card">
@@ -185,12 +209,9 @@
     <input type="time" id="armEnd" value="06:00" onchange="saveArm()">
   </div>
   <div class="info">
-    布防状态：<span id="armNow">未布防</span><br>
-    窗户磁簧：<span id="winNow">正常</span><br>
-    大门门磁：<span id="doorNow">正常</span><br>
-    人体感应：<span id="pirNow">无人</span>
+    布防状态：<span id="armNow">未布防</span>
   </div>
-  <div class="hint">布防时段内：窗户被打开、或大门没刷卡/输密码就被打开，会声光报警并播报对应语音；有人靠近门禁也会报警并播报“门外异常”。点上面的按钮可远程关警。</div>
+  <div class="hint">布防时段内：参与布防的模块一旦触发（窗户打开、大门没刷卡/输密码就打开、有人靠近），对应模块在手机上变红闪烁并播报语音；点上面的按钮可远程关警。</div>
 </div>
 
 <div class="card">
@@ -247,6 +268,19 @@ let voiceCfg = (() => {
   } catch (e) {}
   return c;
 })();
+
+/* 模块布防开关：0=窗户 1=大门 2=人体感应，true=参与布防 false=停用 */
+let senseCfg = (() => {
+  let c = { 0: true, 1: true, 2: true };
+  try {
+    const o = JSON.parse(localStorage.getItem('gate_sense') || 'null');
+    if (o) [0, 1, 2].forEach(n => { if (o[n] === false) c[n] = false; });
+  } catch (e) {}
+  return c;
+})();
+
+/* 最近一次设备上报的状态，改模块开关后重绘用 */
+let lastInfo = null;
 
 function $(id) { return document.getElementById(id); }
 
@@ -458,12 +492,14 @@ function connect() {
     client.subscribe(keyPrefix + '/status', { qos: 1 });
     client.subscribe(keyPrefix + '/info', { qos: 1 });
     client.subscribe(keyPrefix + '/voice', { qos: 1 });
+    client.subscribe(keyPrefix + '/sense', { qos: 1 });
     /* 让设备补发缓冲区里的历史记录，这样关掉网页期间开的门也能看到 */
     client.publish(keyPrefix + '/req', 'sync', { qos: 1 });
     /* 把本地保存的布防时段下发给设备 */
     publishArm();
-    /* 把语音开关也下发一次（retained，设备重启也能拿到） */
+    /* 把语音开关、模块布防也下发一次（retained，设备重启也能拿到） */
     publishVoice();
+    publishSense();
     setState('云端已连接', true);
   });
 
@@ -504,6 +540,18 @@ function connect() {
         voiceCfg[n] = (Number(m[1]) !== 0);
         localStorage.setItem('gate_voice', JSON.stringify(voiceCfg));
         renderVoice();
+      }
+      return;
+    }
+
+    /* 模块布防回读（retained） */
+    if (topic.endsWith('/sense')) {
+      const p = txt.split(',');
+      if (p.length >= 3) {
+        [0, 1, 2].forEach(n => { senseCfg[n] = (Number(p[n]) !== 0); });
+        localStorage.setItem('gate_sense', JSON.stringify(senseCfg));
+        renderSense();
+        renderArm(lastInfo);
       }
     }
   });
@@ -557,6 +605,40 @@ function saveVoice() {
   toast('语音设置已同步到设备');
 }
 
+/* ---------------- 模块布防开关 ---------------- */
+function publishSense() {
+  if (!client || !client.connected) return;
+  const msg = [0, 1, 2].map(n => senseCfg[n] ? 1 : 0).join(',');
+  client.publish(keyPrefix + '/sense', msg, { qos: 1, retain: true });
+}
+
+function renderSense() {
+  let on = 0;
+  [0, 1, 2].forEach(n => {
+    const cb = $('s' + n);
+    if (cb) cb.checked = !!senseCfg[n];
+    if (senseCfg[n]) on++;
+  });
+  const tag = $('modTag');
+  tag.textContent = on === 3 ? '全部布防' : (on === 0 ? '全部停用' : on + '/3 布防');
+  tag.className = 'pill ' + (on === 3 ? 'on' : (on === 0 ? 'bad' : 'off'));
+}
+
+function saveSense() {
+  [0, 1, 2].forEach(n => { senseCfg[n] = $('s' + n).checked; });
+  localStorage.setItem('gate_sense', JSON.stringify(senseCfg));
+  renderSense();
+  publishSense();
+  /* 停用的模块立刻撤掉报警样式，设备会在几秒内把报警一起解除 */
+  if (lastInfo) {
+    if (!senseCfg[0]) lastInfo.alarm = 0;
+    if (!senseCfg[1]) lastInfo.door  = 0;
+    if (!senseCfg[2]) lastInfo.pir   = 0;
+  }
+  renderArm(lastInfo);
+  toast('模块布防已同步到设备');
+}
+
 /* 设备上报的布防/报警状态 */
 function applyInfo(o) {
   /* 本机没设置过时段时，采用设备上的配置 */
@@ -578,6 +660,7 @@ function fmtMin(m) {
 }
 
 function renderArm(o) {
+  lastInfo = o || null;
   const winA  = !!(o && o.alarm);
   const doorA = !!(o && o.door);
   const pirA  = !!(o && o.pir);
@@ -591,26 +674,17 @@ function renderArm(o) {
     ? '布防中（' + armCfg.start + '-' + armCfg.end + '）'
     : '未布防';
 
-  function mark(id, bad, text) {
-    const el = $(id);
-    el.textContent = text;
-    el.style.color = bad ? '#c5221f' : '';
-    el.style.fontWeight = bad ? '700' : '';
+  /* 三个模块：报警时整块变红闪烁；停用的模块显示“未布防” */
+  function tile(tid, sid, bad, enabled, normal, badText) {
+    $(tid).className = 'tile' + (bad ? ' bad' : '');
+    $(sid).textContent = bad ? badText : (enabled ? normal : '未布防');
   }
-  mark('winNow',  winA,  winA  ? '异常打开' : '正常');
-  mark('doorNow', doorA, doorA ? '非法打开' : '正常');
-  mark('pirNow',  pirA,  pirA  ? '有人靠近' : '无人');
+  tile('tWin',  'tWinS',  winA,  senseCfg[0], '正常', '异常打开');
+  tile('tDoor', 'tDoorS', doorA, senseCfg[1], '正常', '非法打开');
+  tile('tPir',  'tPirS',  pirA,  senseCfg[2], '无人', '有人靠近');
 
-  /* 报警横幅：大门 > 窗户 > 人体感应，任一报警都弹出来 */
-  const any = winA || doorA || pirA;
-  $('alarmBox').style.display = any ? 'block' : 'none';
-  if (any) {
-    $('alarmTitle').textContent = doorA ? '非法闯入' : (winA ? '窗户异常打开' : '门外异常');
-    $('alarmSub').textContent = doorA
-      ? '布防期间大门被打开，未刷卡或输入密码，正在声光报警'
-      : (winA ? '布防期间检测到窗户被打开，正在声光报警'
-              : '布防期间检测到有人靠近门禁，正在报警');
-  }
+  /* 有报警时才显示“关闭报警 / 取消布防”按钮 */
+  $('alarmOps').style.display = (winA || doorA || pirA) ? 'block' : 'none';
 }
 
 /* 手机端关闭报警（窗户 / 大门 / 人体感应一起停） */
@@ -687,6 +761,7 @@ $('armOn').checked = armCfg.on;
 $('armStart').value = armCfg.start;
 $('armEnd').value = armCfg.end;
 renderArm(null);
+renderSense();
 renderVoice();
 render();
 
